@@ -1,0 +1,1709 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>均一質性評量多學年雲端系統</title>
+    
+    <!-- 1. Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- 2. Babel Standalone (for JSX & ES Modules) -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="importmap">
+  {
+    "imports": {
+      "react": "https://esm.sh/react@18.2.0",
+      "react-dom": "https://esm.sh/react-dom@18.2.0",
+      "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+      "react/jsx-runtime": "https://esm.sh/react@18.2.0/jsx-runtime",
+      "lucide-react": "https://esm.sh/lucide-react@0.294.0?deps=react@18.2.0"
+    }
+  }
+</script>
+
+    <style>
+      /* Print Styles */
+      @media print {
+        @page { size: A4; margin: 6.7mm; }
+        
+        html, body, #root {
+          height: auto !important;
+          min-height: 0 !important;
+          overflow: visible !important;
+          margin: 0 !important;
+          padding: 0 !important;
+          background: white !important;
+        }
+
+        .screen-only-layout, .no-print {
+           display: none !important;
+        }
+
+        .print-container {
+           display: block !important;
+           position: static !important;
+           width: 100% !important;
+           height: auto !important;
+           overflow: visible !important;
+           background: white !important;
+           z-index: 9999;
+           page-break-after: always; /* 強制每個學生印完後都換新的一頁 */
+           break-after: page;
+        }
+
+        .print-container > div {
+           box-shadow: none !important;
+           margin: 0 !important;
+        }
+      }
+
+      /* Custom Scrollbar */
+      .custom-scrollbar::-webkit-scrollbar {
+          width: 6px;
+      }
+      .custom-scrollbar::-webkit-scrollbar-track {
+          background: #f1f5f9;
+      }
+      .custom-scrollbar::-webkit-scrollbar-thumb {
+          background: #cbd5e1;
+          border-radius: 3px;
+      }
+      .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+          background: #94a3b8;
+      }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-900">
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module">
+        // --- 1. 統一指向鎖定在 React 18.2.0 的生態圈內 ---
+// --- 修正後絕對安全、防升級崩潰的寫法 ---
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { createRoot } from 'react-dom/client';
+import { 
+    Eye, Key, LogOut, Pencil, FileUp, UserPlus, Cloud, Settings, Search, X, 
+    Users, Trash2, Calendar, Plus, ChevronRight, AlertCircle, AlertTriangle, 
+    CheckCircle2, Loader2, GripVertical, Hand, Save, BookOpen, Printer, 
+    ArrowLeft, ListChecks, Lock, Layers 
+} from 'lucide-react';
+
+        // --- 2. Constants & Types (Simulated) ---
+        const UserRole = {
+            ADMIN: 'ADMIN',
+            TEACHER: 'TEACHER',
+            VIEWER: 'VIEWER'
+        };
+
+        // --- 3. Service (mockCloudService) ---
+        const DEFAULT_GAS_URL = "https://script.google.com/macros/s/AKfycby0Dkr-jG2hBBNbU6SZZsOJ9UEv3CL8jlWmJeo2G4R_yOgpUYqwMCdP9PyOsMopPMSD/exec"; 
+        const GAS_URL_KEY = 'junyi_gas_api_url';
+        const AUTH_KEY = 'junyi_auth_session';
+        const STORAGE_KEY = 'junyi_cloud_db_v3';
+
+        class GoogleSheetsService {
+            constructor() {
+                this.scriptUrl = localStorage.getItem(GAS_URL_KEY) || DEFAULT_GAS_URL;
+            }
+
+            setApiUrl(url) {
+                this.scriptUrl = url;
+                localStorage.setItem(GAS_URL_KEY, url);
+            }
+
+            getApiUrl() {
+                return this.scriptUrl;
+            }
+
+            async fetchDb() {
+                if (!this.scriptUrl) {
+                    const saved = localStorage.getItem(STORAGE_KEY);
+                    return saved ? JSON.parse(saved) : this.getInitialDb();
+                }
+
+                try {
+                    const response = await fetch(this.scriptUrl + '?action=GET_DB');
+                    if (!response.ok) throw new Error('Network response was not ok');
+                    const data = await response.json();
+                    
+                    // 自動初始化檢查：如果雲端資料是空的 (例如剛部署 GAS)，自動填入預設帳號
+                    if (!data || !data.years || !data.users || data.users.length === 0) {
+                        console.warn("雲端資料庫為空或未初始化，正在執行自動初始化...");
+                        const initial = this.getInitialDb();
+                        await this.saveDb(initial); // 寫入預設的 7 個帳號與管理員
+                        return initial;
+                    }
+
+                    return data;
+                } catch (e) {
+                    console.error("Cloud fetch failed", e);
+                    const saved = localStorage.getItem(STORAGE_KEY);
+                    return saved ? JSON.parse(saved) : this.getInitialDb();
+                }
+            }
+
+            // 全域儲存 (僅供管理員或初始化使用)
+            async saveDb(db) {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
+                if (!this.scriptUrl) return true;
+                try {
+                    await fetch(this.scriptUrl, {
+                        method: 'POST',
+                        mode: 'no-cors',
+                        body: JSON.stringify({ action: "SAVE_ALL", data: db })
+                    });
+                    return true;
+                } catch (e) {
+                    console.error("Cloud save failed", e);
+                    return false;
+                }
+            }
+
+            createDefaultClasses(yearName) {
+                const classNames = [
+                    "一年A班",
+                    "二年A班",
+                    "三年A班",
+                    "四年A班",
+                    "五年A班",
+                    "六年A班",
+                    "備用區"
+                ];
+
+                return classNames.map((name, i) => ({
+                    id: `class${i + 1}`,
+                    name: name,
+                    settings: {
+                        year: yearName,
+                        className: name,
+                        mentor: `導師${i + 1}`,
+                        context: "這是一個充滿活力的班級範本...",
+                        levels: ["卓越", "優異", "通過", "加油"],
+                        section2Indicators: ["整潔習慣", "人際互動", "團體合作", "自主學習"],
+                        subjects: [
+                            { name: "國語文", context: "培養基本聽說讀寫能力。", indicators: ["聆聽口語", "識字寫字", "閱讀理解", "作文表達"] },
+                            { name: "數學", context: "建立邏輯思維與空間概念。", indicators: ["數與量", "幾何圖形", "代數應用", "統計圖表"] }
+                        ]
+                    },
+                    students: []
+                }));
+            }
+
+            getInitialDb() {
+                const years = [
+                    {
+                        id: 'y114',
+                        name: '114學年度',
+                        classes: this.createDefaultClasses('114學年度')
+                    }
+                ];
+
+                // 產生預設帳號：Admin + 7 位老師 (class1 ~ class7)
+                const users = [
+                    { id: 'admin', username: 'admin', password: 'je223301', role: UserRole.ADMIN },
+                    { id: 'viewer', username: 'viewer', password: 'viewer', role: UserRole.VIEWER },
+                    ...Array.from({ length: 7 }, (_, i) => ({
+                        id: `teacher${i + 1}`,
+                        username: `class${i + 1}`, 
+                        password: `1234`,          
+                        role: UserRole.TEACHER,
+                        classId: `class${i + 1}`
+                    }))
+                ];
+
+                return { years, users };
+            }
+
+            async getAllYears() {
+                const db = await this.fetchDb();
+                return db.years || [];
+            }
+
+            async addYear(name) {
+                const db = await this.fetchDb();
+                
+                // 1. 建立新學年的基本架構 (空班級)
+                const newClasses = this.createDefaultClasses(name);
+                
+                // 2. 升級邏輯：取得上一個學年 (如果有的話)
+                const previousYear = db.years.length > 0 ? db.years[db.years.length - 1] : null;
+
+                if (previousYear) {
+                    const promotionMap = {
+                        'class1': 'class2',
+                        'class2': 'class3',
+                        'class3': 'class4',
+                        'class4': 'class5',
+                        'class5': 'class6'
+                    };
+
+                    Object.entries(promotionMap).forEach(([prevClassId, nextClassId]) => {
+                        const prevClass = previousYear.classes.find(c => c.id === prevClassId);
+                        const nextClass = newClasses.find(c => c.id === nextClassId);
+
+                        if (prevClass && nextClass && prevClass.students.length > 0) {
+                            nextClass.students = prevClass.students.map(s => ({
+                                id: s.id,   
+                                no: s.no,   
+                                name: s.name, 
+                                data: {     
+                                    health: [], 
+                                    indicators: [], 
+                                    subGrades: {},
+                                    attendance: { total_days: "", official_leave: "", personal_leave: "", sick_leave: "", funeral_leave: "", late_count: "", actual_days: "" },
+                                    s2_title: "二、個人整體樣貌", 
+                                    s4_title: "六、導師整體建議",
+                                    overall: "", 
+                                    advice: ""
+                                }
+                            }));
+                        }
+                    });
+                }
+
+                const newYear = {
+                    id: 'y' + Date.now(),
+                    name,
+                    classes: newClasses
+                };
+                db.years.push(newYear);
+                return await this.saveDb(db);
+            }
+
+            async deleteYear(yearId) {
+                const db = await this.fetchDb();
+                db.years = db.years.filter(y => y.id !== yearId);
+                if (db.years.length === 0) {
+                    const name = '114學年度';
+                    db.years = [ { id: 'y'+Date.now(), name: name, classes: this.createDefaultClasses(name) }];
+                }
+                return await this.saveDb(db);
+            }
+
+            async login(username, password) {
+                const db = await this.fetchDb();
+                const users = db.users || [];
+                const user = users.find(u => u.username === username && u.password === password);
+                if (!user) return null;
+                const { password: _, ...safeUser } = user;
+                localStorage.setItem(AUTH_KEY, JSON.stringify(safeUser));
+                return safeUser;
+            }
+
+            async logout() {
+                localStorage.removeItem(AUTH_KEY);
+            }
+
+            async getCurrentUser() {
+                const saved = localStorage.getItem(AUTH_KEY);
+                return saved ? JSON.parse(saved) : null;
+            }
+
+            async getClassData(yearId, classId) {
+                const db = await this.fetchDb();
+                const year = db.years.find(y => y.id === yearId);
+                if (!year) return null;
+                return year.classes.find(c => c.id === classId) || null;
+            }
+
+            /**
+             * ★★★ 單一班級存檔 (Atomic Update) ★★★
+             * 使用 SAVE_SINGLE_CLASS 動作，只傳送該班級資料給後端
+             * 這會對應到 GAS 的 LockService 邏輯，防止覆蓋其他老師的存檔
+             */
+            async saveClassData(yearId, classId, data) {
+                // 1. 本地備份 (Offline Support / UI Optimistic Update)
+                try {
+                    const db = await this.fetchDb();
+                    const yearIdx = db.years.findIndex(y => y.id === yearId);
+                    if (yearIdx !== -1) {
+                        const classIdx = db.years[yearIdx].classes.findIndex(c => c.id === classId);
+                        if (classIdx !== -1) {
+                            db.years[yearIdx].classes[classIdx] = data;
+                            localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
+                        }
+                    }
+                } catch (e) {
+                    console.warn("Local storage update failed", e);
+                }
+
+                if (!this.scriptUrl) return true;
+
+                // 2. 傳送單一班級資料至 GAS (Atomic Update)
+                try {
+                    await fetch(this.scriptUrl, {
+                        method: 'POST',
+                        mode: 'no-cors',
+                        body: JSON.stringify({ 
+                            action: "SAVE_SINGLE_CLASS", 
+                            yearId: yearId, 
+                            classId: classId,
+                            classData: data 
+                        })
+                    });
+                    return true;
+                } catch (e) {
+                    console.error("Cloud atomic save failed", e);
+                    return false;
+                }
+            }
+
+            /**
+             * 刪除學生 (使用安全存檔)
+             * 重用 saveClassData 確保這個刪除動作也是 atomic 的
+             */
+            async deleteStudent(yearId, classId, studentId) {
+                // 取得目前班級的最新資料 (從本地或雲端)
+                const cls = await this.getClassData(yearId, classId);
+                if (!cls) return false;
+                
+                const originalCount = cls.students.length;
+                cls.students = cls.students.filter(s => s.id !== studentId);
+                
+                if (cls.students.length === originalCount) return false;
+                
+                return await this.saveClassData(yearId, classId, cls);
+            }
+
+            async updatePassword(username, newPass) {
+                const db = await this.fetchDb();
+                const idx = db.users.findIndex(u => u.username === username);
+                if (idx === -1) return false;
+                db.users[idx].password = newPass;
+                return await this.saveDb(db);
+            }
+
+            async updateClassMetadata(yearId, classId, name, mentor) {
+                const db = await this.fetchDb();
+                const year = db.years.find(y => y.id === yearId);
+                if (!year) return false;
+                const cls = year.classes.find(c => c.id === classId);
+                if (!cls) return false;
+                cls.name = name;
+                cls.settings.className = name;
+                cls.settings.mentor = mentor;
+                // Metadata 更新通常是管理員操作
+                return await this.saveDb(db);
+            }
+        }
+        const cloudService = new GoogleSheetsService();
+
+        // --- 4. Components ---
+
+        // 4.1 Login Component
+        const Login = ({ onLogin }) => {
+            const [username, setUsername] = useState('');
+            const [password, setPassword] = useState('');
+            const [error, setError] = useState('');
+            const [loading, setLoading] = useState(false);
+
+            const handleSubmit = async (e) => {
+                e.preventDefault();
+                setLoading(true);
+                setError('');
+                try {
+                    const user = await cloudService.login(username, password);
+                    if (user) {
+                        onLogin(user);
+                    } else {
+                        setError('帳號或密碼錯誤');
+                    }
+                } catch (err) {
+                    setError('登入失敗，請稍後再試');
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            return (
+                <div className="min-h-screen flex items-center justify-center bg-slate-900">
+                    <div className="bg-white p-10 rounded-3xl shadow-2xl w-full max-w-md animate-in fade-in zoom-in duration-300">
+                        <div className="text-center mb-10">
+                            <div className="flex justify-center mb-6">
+                                <div className="w-full px-4 flex items-center justify-center">
+                                    <img src="https://junyi.tw/sites/default/files/logo--junyi-header-2020--w300@2x.png" alt="Logo" className="max-h-20 object-contain"/>
+                                </div>
+                            </div>
+                            <h1 className="text-3xl font-black text-slate-800 mb-2">均一質性評量系統</h1>
+                            <p className="text-indigo-500 text-sm font-bold tracking-widest uppercase">多學年雲端管理版</p>
+                        </div>
+                        <form onSubmit={handleSubmit} className="space-y-6">
+                            <div>
+                                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5 ml-1">帳號 Username</label>
+                                <input type="text" value={username} onChange={(e) => setUsername(e.target.value)} className="w-full p-4 bg-slate-50 border-2 border-slate-100 rounded-2xl focus:border-indigo-500 focus:bg-white outline-none transition-all font-bold text-slate-700" placeholder="請輸入帳號" required />
+                            </div>
+                            <div>
+                                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5 ml-1">密碼 Password</label>
+                                <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full p-4 bg-slate-50 border-2 border-slate-100 rounded-2xl focus:border-indigo-500 focus:bg-white outline-none transition-all font-bold text-slate-700" placeholder="請輸入密碼" required />
+                            </div>
+                            {error && <div className="bg-red-50 text-red-600 p-4 rounded-2xl text-sm text-center font-bold border border-red-100 animate-bounce">{error}</div>}
+                            <button type="submit" disabled={loading} className={`w-full py-4 rounded-2xl text-white font-black transition-all transform active:scale-95 shadow-xl ${loading ? 'bg-slate-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700 hover:shadow-indigo-200'}`}>{loading ? '驗證中...' : '登入系統'}</button>
+                        </form>
+                    </div>
+                </div>
+            );
+        };
+
+
+
+
+
+        // 4.2 PrintPreview Component (Updated with Remark column)
+const PrintPreview = ({ student, classSettings }) => {
+    const { data } = student;
+    const levels = classSettings.levels || ["卓越", "優異", "通過", "加油"];
+    const indicators = data.indicators || [];
+    const printDate = new Date().toLocaleDateString('zh-TW', {
+        year: 'numeric', month: '2-digit', day: '2-digit'
+    });
+
+    const health = data.health || [];
+    const att = data.attendance || {
+        total_days: 0, official_leave: 0, personal_leave: 0, 
+        sick_leave: 0, funeral_leave: 0, late_count: 0, actual_days: 0
+    };
+
+    const mainSubjects = [];
+    const sideSubjects = [];
+
+    if (classSettings.subjects) {
+        classSettings.subjects.forEach((sub) => {
+            const subData = (data.subGrades && data.subGrades[sub.name]) || {
+                comment: "",
+                indicators: []
+            };
+            const hasIndicators = subData.indicators && subData.indicators.length > 0;
+            const subjectItem = { ...sub, subData };
+            
+            if (hasIndicators) {
+                mainSubjects.push(subjectItem);
+            } else {
+                sideSubjects.push(subjectItem);
+            }
+        });
+    }
+
+    // --- 渲染學科卡片（包含備註欄位） ---
+    const renderSubjectCard = (item, idx) => {
+    const { subData } = item;
+    const subIndicators = subData.indicators || [];
+
+    return (
+        <div key={idx} className="mb-6 break-inside-avoid">
+            <div className="bg-slate-100 p-2 font-bold border-l-4 border-black mb-2">
+                {item.name}
+            </div>
+            {item.context && (
+                <p className="text-sm text-slate-500 italic mb-2 ml-2">{item.context}</p>
+            )}
+            <div className="leading-relaxed border border-black p-3 mb-2 min-h-[40px] whitespace-pre-wrap text-sm">
+                {subData.comment || "（無總結評語）"}
+            </div>
+            {subIndicators.length > 0 && (
+                <table className="w-full border-collapse border border-black text-xs table-fixed">
+                    <thead>
+                        <tr className="bg-slate-50">
+                            {/* 固定指標寬度為 30% */}
+                            <th className="border border-black p-1 text-left w-[30%]">評量指標</th>
+                            
+                            {/* 每個分數等級佔 10%，共 40% */}
+                            {levels.map((l, i) => (
+                                <th key={i} className="border border-black p-1 w-[10%] text-center">
+                                    {l.substring(0, 4)}
+                                </th>
+                            ))}
+                            
+                            {/* 固定備註寬度為 30% */}
+                            <th className="border border-black p-1 text-left w-[30%]">備註</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {subIndicators.map((ind, i) => (
+                            <tr key={i}>
+                                <td className="border border-black p-1 font-medium whitespace-normal break-words">
+                                    {ind.name}
+                                </td>
+                                {levels.map((_, lIdx) => (
+                                    <td key={lIdx} className="border border-black p-1 text-center">
+                                        {ind.score === lIdx + 1 ? <span className="text-sm">●</span> : ''}
+                                    </td>
+                                ))}
+                                <td className="border border-black p-1 italic text-slate-700 whitespace-normal break-words">
+                                    {ind.remark || ""}
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            )}
+        </div>
+    );
+};
+
+
+
+    return (
+        <div className="print-container">
+            <div className="p-[6.7mm] bg-white text-slate-900 box-border w-full">
+                <div className="text-base leading-snug">
+                    {/* 標題區 */}
+                    <div className="text-center mb-6">
+                        <h1 className="text-2xl font-black mb-2">均一國際教育實驗高級中學附設國小部</h1>
+                        <h2 className="text-xl font-bold border-b-2 border-black inline-block pb-1 mb-4">學生質性評量表</h2>
+                        <div className="flex justify-between font-bold mt-2 px-1">
+                            <span>學年度：{classSettings.year}</span>
+                            <span>班級：{classSettings.className}</span>
+                            <span>姓名：{student.name} ({student.no}號)</span>
+                        </div>
+                    </div>
+
+                    {/* 一、班級現況 */}
+                    <div className="mb-6 break-inside-avoid">
+                        <div className="bg-slate-100 p-2 font-bold border-l-4 border-black mb-2">一、班級現況</div>
+                        <div className="leading-relaxed whitespace-pre-wrap text-justify p-1 text-sm">{classSettings.context}</div>
+                    </div>
+
+
+                    {/* 二、個人整體樣貌 */}
+<div className="mb-6 break-inside-avoid">
+    <div className="bg-slate-100 p-2 font-bold border-l-4 border-black mb-2">{data.s2_title}</div>
+    <div className="leading-relaxed whitespace-pre-wrap mb-4 p-1 text-sm">{data.overall}</div>
+    {indicators.length > 0 && (
+        <table className="w-full border-collapse border border-black text-xs table-fixed">
+            <thead>
+                <tr className="bg-slate-50">
+                    {/* 與上方學科表格保持一致的 30% / 10% / 30% 配置 */}
+                    <th className="border border-black p-1 text-left w-[30%]">指標項目</th>
+                    {levels.map((l, i) => (
+                        <th key={i} className="border border-black p-1 w-[10%] text-center">
+                            {l.substring(0, 4)}
+                        </th>
+                    ))}
+                    <th className="border border-black p-1 text-left w-[30%]">備註</th>
+                </tr>
+            </thead>
+            <tbody>
+                {indicators.map((ind, i) => (
+                    <tr key={i}>
+                        <td className="border border-black p-1 font-medium whitespace-normal break-words">{ind.name}</td>
+                        {levels.map((_, lIdx) => (
+                            <td key={lIdx} className="border border-black p-1 text-center">
+                                {ind.score === lIdx + 1 ? <span className="text-sm">●</span> : ''}
+                            </td>
+                        ))}
+                        <td className="border border-black p-1 italic text-slate-700 whitespace-normal break-words">
+                            {ind.remark || ""}
+                        </td>
+                    </tr>
+                ))}
+            </tbody>
+        </table>
+    )}
+</div>
+
+                    {/* 三、主課程 */}
+                    {mainSubjects.length > 0 && (
+                        <div className="mb-8 break-inside-avoid">
+                            <div className="bg-slate-100 p-2 font-bold border-l-4 border-black mb-3">三、主課程</div>
+                            <div className="pl-4 space-y-3">
+                                {mainSubjects.map((item, idx) => renderSubjectCard(item, idx))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* 四、副課程 */}
+                    {sideSubjects.length > 0 && (
+                        <div className="mb-8 break-inside-avoid">
+                            <div className="bg-slate-100 p-2 font-bold border-l-4 border-black mb-3">四、副課程</div>
+                            <div className="pl-4 space-y-3">   
+                                {sideSubjects.map((item, idx) => renderSubjectCard(item, idx))}
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="mb-6 break-inside-avoid">
+                        <div className="bg-slate-100 p-2 font-bold border-l-4 border-black mb-2">五、出席與健康紀錄</div>
+                        <div className="flex gap-4">
+                            {/* Health Table */}
+                            <div className="flex-1">
+                                <table className="w-full border-collapse border border-black text-center mb-2">
+                                    <thead>
+                                        <tr className="bg-slate-50">
+                                            <th className="border border-black p-1" colSpan={7}>健康檢查紀錄</th>
+                                        </tr>
+                                        <tr className="bg-slate-50 text-xs">
+                                            <th className="border border-black p-1">測量時間</th>
+                                            <th className="border border-black p-1">身高</th>
+                                            <th className="border border-black p-1">體重</th>
+                                            <th className="border border-black p-1">裸視(右)</th>
+                                            <th className="border border-black p-1">裸視(左)</th>
+                                            <th className="border border-black p-1">戴鏡(右)</th>
+                                            <th className="border border-black p-1">戴鏡(左)</th>                                            
+
+                                        </tr>
+                                    </thead>
+                                    <tbody className="text-sm">
+                                        {health.length > 0 ? health.map((h, i) => (
+                                            <tr key={i}>
+                                                <td className="border border-black p-1">{h.term}</td>
+                                                <td className="border border-black p-1">{h.h}</td>
+                                                <td className="border border-black p-1">{h.w}</td>
+                                                <td className="border border-black p-1">{h.vr}</td>
+                                                <td className="border border-black p-1">{h.vl}</td>
+                                                <td className="border border-black p-1">{h.cvr}</td>
+                                                <td className="border border-black p-1">{h.cvl}</td>
+                                            </tr>
+                                        )) : (
+                                            <tr><td colSpan={5} className="border border-black p-2 text-slate-400">無紀錄</td></tr>
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            {/* Attendance Table */}
+                            <div className="flex-1">
+                                <table className="w-full border-collapse border border-black text-center text-sm">
+                                    <thead>
+                                        <tr className="bg-slate-50">
+                                            <th className="border border-black p-1" colSpan={2}>出席紀錄 (本學年)</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr><td className="border border-black p-1 bg-slate-50 w-24">應出席日數</td><td className="border border-black p-1">{att.total_days}</td></tr>
+                                        <tr><td className="border border-black p-1 bg-slate-50">公假</td><td className="border border-black p-1">{att.official_leave}</td></tr>
+                                        <tr><td className="border border-black p-1 bg-slate-50">事假</td><td className="border border-black p-1">{att.personal_leave}</td></tr>
+                                        <tr><td className="border border-black p-1 bg-slate-50">病假</td><td className="border border-black p-1">{att.sick_leave}</td></tr>
+                                        <tr><td className="border border-black p-1 bg-slate-50">喪假</td><td className="border border-black p-1">{att.funeral_leave}</td></tr>
+                                        <tr><td className="border border-black p-1 bg-slate-50">遲到次數</td><td className="border border-black p-1">{att.late_count}</td></tr>
+                                        <tr><td className="border border-black p-1 bg-slate-50 font-bold">實際出席</td><td className="border border-black p-1 font-bold">{att.actual_days}</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+
+                    {/* 六、導師整體建議 */}
+                    <div className="mb-6 break-inside-avoid">
+                        <div className="bg-slate-100 p-2 font-bold border-l-4 border-black mb-2">{data.s4_title}</div>
+                        <div className="leading-relaxed border border-black p-4 min-h-[120px] whitespace-pre-wrap text-sm">
+                            {data.advice}
+                        </div>
+                    </div>
+
+                    {/* 簽章 */}
+                    <div className="mt-12 flex justify-between items-end break-inside-avoid">
+                        <div className="text-[10px] text-slate-400">列印日期：{printDate}</div>
+                        <div className="flex gap-20 mb-4">
+                            <div className="w-32 border-b-2 border-black text-center pb-1 font-bold">導師簽章</div>
+                            <div className="w-32 border-b-2 border-black text-center pb-1 font-bold">國小部核章</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+
+// --- 0. 全域字數限制設定 ---
+const LIMITS = {
+    OVERALL: 500,       // 二、個人整體樣貌
+    SUB_COMMENT: 300,   // 學科總結評語
+    REMARK: 40,         // 指標表格內的小備註
+    ADVICE: 600         // 六、導師整體建議
+};
+
+// --- 1. 字數計數器組件 ---
+const CharCounter = ({ current, limit }) => {
+    const len = (current || "").length;
+    const isOver = len >= limit;
+    return (
+        <div className={`text-[10px] text-right mt-1 font-bold ${isOver ? 'text-red-500' : 'text-slate-400'}`}>
+            {len} / {limit} 字
+        </div>
+    );
+};
+
+// --- 4.3 StudentEditor Component (完整功能版) ---
+const StudentEditor = ({ student, subjects, section2Config, levels, onChange, readOnly = false }) => {
+    
+    // 初始化防錯處理
+    if (!student.data.attendance) {
+        student.data.attendance = { total_days: "", official_leave: "", personal_leave: "", sick_leave: "", funeral_leave: "", late_count: "", actual_days: "" };
+    }
+
+    // --- 內部輔助函數 ---
+    const handleChange = (field, value, nested) => {
+        if (readOnly) return;
+        const newData = { ...student.data };
+        if (nested) {
+            newData[nested][field] = value;
+        } else {
+            newData[field] = value;
+        }
+        onChange({ ...student, data: newData });
+    };
+
+    const updateGenericInd = (idx, field, value) => {
+        if (readOnly) return;
+        const newInds = [...student.data.indicators];
+        newInds[idx] = { ...newInds[idx], [field]: value };
+        onChange({ ...student, data: { ...student.data, indicators: newInds } });
+    };
+
+    const updateSubInd = (subName, idx, field, value) => {
+        if (readOnly) return;
+        const newSubGrades = { ...student.data.subGrades };
+        if (!newSubGrades[subName]) newSubGrades[subName] = { comment: "", indicators: [] };
+        const newInds = [...newSubGrades[subName].indicators];
+        newInds[idx] = { ...newInds[idx], [field]: value };
+        newSubGrades[subName] = { ...newSubGrades[subName], indicators: newInds };
+        onChange({ ...student, data: { ...student.data, subGrades: newSubGrades } });
+    };
+
+    const updateHealth = (idx, field, val) => {
+        if (readOnly) return;
+        const newHealth = [...student.data.health];
+        newHealth[idx][field] = val;
+        onChange({ ...student, data: { ...student.data, health: newHealth } });
+    };
+
+    const updateAttendance = (field, val) => {
+        if (readOnly) return;
+        const newAtt = { ...student.data.attendance, [field]: val };
+        onChange({ ...student, data: { ...student.data, attendance: newAtt } });
+    };
+
+    const updateSubComment = (subName, val) => {
+        if (readOnly) return;
+        const newSubGrades = { ...student.data.subGrades };
+        if (!newSubGrades[subName]) newSubGrades[subName] = { comment: "", indicators: [] };
+        newSubGrades[subName] = { ...newSubGrades[subName], comment: val };
+        onChange({ ...student, data: { ...student.data, subGrades: newSubGrades } });
+    };
+
+
+// --- 4.3 StudentEditor 內的 useEffect 優化版 ---
+React.useEffect(() => {
+    if (readOnly) return;
+
+    const currentData = student.data;
+    const configS2 = section2Config || [];
+    const currentS2Inds = currentData.indicators || [];
+
+    // --- 檢查 1：二、個人整體樣貌指標是否有變 ---
+    const isS2Mismatch = configS2.length !== currentS2Inds.length || 
+                         configS2.some((name, i) => name !== currentS2Inds[i]?.name);
+
+    // --- 檢查 2：學科數量或名稱是否有變 ---
+    const settingSubjectNames = subjects.map(s => s.name);
+    const currentStudentSubNames = Object.keys(currentData.subGrades || {});
+    
+    // 檢查是否有科目被刪除或新增
+    let isSubMismatch = currentStudentSubNames.length !== settingSubjectNames.length ||
+                        settingSubjectNames.some(name => !currentStudentSubNames.includes(name));
+
+    // 如果科目名稱沒變，進一步檢查該科目內的「指標細項」是否有變
+    if (!isSubMismatch) {
+        isSubMismatch = subjects.some(sub => {
+            const studentSubInds = currentData.subGrades[sub.name]?.indicators || [];
+            return sub.indicators.length !== studentSubInds.length ||
+                   sub.indicators.some((name, i) => name !== studentSubInds[i]?.name);
+        });
+    }
+
+    // --- 只有在真的有差異時，才執行更新 ---
+    if (isS2Mismatch || isSubMismatch) {
+        console.log("偵測到架構差異，正在同步學生資料結構...");
+        
+        // 此時才進行拷貝 (且只針對需要變動的部分)
+        const nextData = { ...currentData }; 
+
+        // 同步 S2 指標
+        if (isS2Mismatch) {
+            nextData.indicators = configS2.map(name => {
+                const existing = currentS2Inds.find(o => o.name === name);
+                return { 
+                    name, 
+                    score: existing ? existing.score : 0, 
+                    remark: existing ? (existing.remark || "") : "" 
+                };
+            });
+        }
+
+        // 同步學科指標
+        if (isSubMismatch) {
+            const nextSubGrades = {};
+            subjects.forEach(sub => {
+                const existingSub = currentData.subGrades[sub.name];
+                if (!existingSub) {
+                    // 全新科目
+                    nextSubGrades[sub.name] = { 
+                        comment: "", 
+                        indicators: sub.indicators.map(n => ({ name: n, score: 0, remark: "" })) 
+                    };
+                } else {
+                    // 既有科目，比對指標
+                    const currentSubInds = existingSub.indicators || [];
+                    nextSubGrades[sub.name] = {
+                        ...existingSub,
+                        indicators: sub.indicators.map(name => {
+                            const existingInd = currentSubInds.find(o => o.name === name);
+                            return { 
+                                name, 
+                                score: existingInd ? existingInd.score : 0, 
+                                remark: existingInd ? (existingInd.remark || "") : "" 
+                            };
+                        })
+                    };
+                }
+            });
+            nextData.subGrades = nextSubGrades;
+        }
+
+        // 送出更新
+        onChange({ ...student, data: nextData });
+    }
+}, [subjects, section2Config, student.id, readOnly]); // 依賴項保持不變
+
+
+    return (
+        <div className="space-y-6 pb-20">
+            {/* Section 2: 個人整體樣貌 */}
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+                <div className="font-bold mb-4 text-lg border-b border-dashed border-transparent inline-block">
+                    {student.data.s2_title}
+                </div>
+                <div className="relative">
+                    <textarea 
+                        className="w-full border rounded-xl p-4 h-32 bg-slate-50 text-sm focus:bg-white transition mb-1 disabled:text-slate-600 disabled:bg-slate-100 outline-none" 
+                        disabled={readOnly} 
+                        value={student.data.overall} 
+                        maxLength={LIMITS.OVERALL}
+                        onChange={(e) => handleChange('overall', e.target.value)}
+                    />
+                    <CharCounter current={student.data.overall} limit={LIMITS.OVERALL} />
+                </div>
+                
+                <div className="overflow-x-auto mt-4">
+                    <table className="w-full text-xs border-collapse border">
+                        <thead>
+                            <tr className="bg-slate-100">
+                                <th className="border p-2 text-left text-slate-500 w-40">評量指標項目</th>
+                                {levels.map((l, idx) => <th key={idx} className="border p-2 text-center">{l}</th>)}
+                                <th className="border p-2 text-left text-slate-500">備註 (限{LIMITS.REMARK}字)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {student.data.indicators.map((ind, iIdx) => (
+                                <tr key={iIdx} className="hover:bg-slate-50/50 transition">
+                                    <td className="border p-2 bg-slate-50 text-slate-700 font-medium w-40">{ind.name}</td>
+                                    {levels.map((_, lIdx) => (
+                                        <td key={lIdx} className={`border p-2 text-center transition ${!readOnly ? 'cursor-pointer' : ''} ${ind.score === lIdx + 1 ? 'bg-indigo-600 text-white font-bold' : ''}`} 
+                                            onClick={() => updateGenericInd(iIdx, 'score', lIdx + 1)}>
+                                            {ind.score === lIdx + 1 ? '✓' : '○'}
+                                        </td>
+                                    ))}
+                                    <td className="border p-1">
+                                        <input 
+                                            type="text" 
+                                            className="w-full p-2 bg-transparent outline-none focus:bg-white transition"
+                                            maxLength={LIMITS.REMARK}
+                                            disabled={readOnly}
+                                            value={ind.remark || ""}
+                                            onChange={(e) => updateGenericInd(iIdx, 'remark', e.target.value)}
+                                        />
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            {/* Section 3: 各學科評分 */}
+            <div className="space-y-6">
+                {subjects.map((sub, idx) => {
+                    const subData = student.data.subGrades[sub.name] || { comment: "", indicators: [] };
+                    return (
+                        <div key={idx} className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+                            <h4 className="font-bold mb-4 text-emerald-800">{sub.name}</h4>
+                            <div className="relative">
+                                <textarea 
+                                    className="w-full border p-4 rounded-xl text-sm mb-1 h-24 bg-slate-50 focus:bg-white transition outline-none disabled:text-slate-600 disabled:bg-slate-100" 
+                                    placeholder="輸入學科總結評語..." 
+                                    maxLength={LIMITS.SUB_COMMENT}
+                                    disabled={readOnly} 
+                                    value={subData.comment} 
+                                    onChange={(e) => updateSubComment(sub.name, e.target.value)}
+                                />
+                                <CharCounter current={subData.comment} limit={LIMITS.SUB_COMMENT} />
+                            </div>
+                            
+                            <table className="w-full text-xs border-collapse border mt-4">
+                                <thead>
+                                    <tr className="bg-slate-50">
+                                        <td className="border p-2 font-bold">指標</td>
+                                        {levels.map((l, lIdx) => <td key={lIdx} className="border p-2 text-center font-bold">{l}</td>)}
+                                        <td className="border p-2 font-bold">備註 (限{LIMITS.REMARK}字)</td>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {subData.indicators.map((ind, iIdx) => (
+                                        <tr key={iIdx}>
+                                            <td className="border p-2 bg-slate-50 text-slate-700 w-40">{ind.name}</td>
+                                            {levels.map((_, lIdx) => (
+                                                <td key={lIdx} className={`border p-2 text-center transition ${!readOnly ? 'cursor-pointer' : ''} ${ind.score === lIdx+1 ? 'bg-emerald-600 text-white font-bold' : ''}`} 
+                                                    onClick={() => updateSubInd(sub.name, iIdx, 'score', lIdx + 1)}>
+                                                    {ind.score === lIdx+1 ? '✓' : '○'}
+                                                </td>
+                                            ))}
+                                            <td className="border p-1">
+                                                <input 
+                                                    type="text" 
+                                                    className="w-full p-2 bg-transparent outline-none focus:bg-white transition"
+                                                    maxLength={LIMITS.REMARK}
+                                                    disabled={readOnly}
+                                                    value={ind.remark || ""}
+                                                    onChange={(e) => updateSubInd(sub.name, iIdx, 'remark', e.target.value)}
+                                                />
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    );
+                })}
+            </div>
+
+            {/* Section 5: 出席與健康紀錄 */}
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+                <div className="mb-8 border-b pb-6 border-slate-100">
+                    <h3 className="font-bold flex items-center gap-2 mb-4 text-slate-800">📅 出席紀錄 (本學年)</h3>
+                    <div className="grid grid-cols-7 gap-2 bg-slate-50 p-4 rounded-xl border border-slate-100">
+                        {['應出席','公假','事假','病假','喪假','遲到','實際出席'].map((label, idx) => {
+                            const fields = ['total_days', 'official_leave', 'personal_leave', 'sick_leave', 'funeral_leave', 'late_count', 'actual_days'];
+                            const field = fields[idx];
+                            return (
+                                <div key={idx}>
+                                    <label className="text-[10px] text-slate-400 block text-center mb-1 font-bold">{label}</label>
+                                    <input 
+                                        disabled={readOnly} 
+                                        className="border-2 border-slate-100 p-2 rounded-lg w-full text-center text-sm disabled:bg-white focus:border-indigo-500 outline-none transition" 
+                                        maxLength={5}
+                                        value={(student.data.attendance || {})[field] || ""} 
+                                        onChange={(e) => updateAttendance(field, e.target.value)} 
+                                    />
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+
+                <div className="flex justify-between items-center mb-4">
+                    <h3 className="font-bold flex items-center gap-2 text-slate-800">🏥 健康中心紀錄</h3>
+                    {!readOnly && (
+                        <button className="text-xs bg-indigo-50 text-indigo-600 px-4 py-1.5 rounded-lg hover:bg-indigo-100 font-bold transition" onClick={() => { 
+                            const newHealth = [...student.data.health, { term: "", h: "", w: "", vr: "", vl: "", cvr: "", cvl: "" }]; 
+                            onChange({...student, data: {...student.data, health: newHealth}}); 
+                        }}>+ 新增測量紀錄</button>
+                    )}
+                </div>
+                <div className="space-y-3">
+                    {student.data.health.map((h, hIdx) => (
+                        <div key={hIdx} className="bg-slate-50 p-4 rounded-xl relative flex flex-wrap md:flex-nowrap items-end gap-3 border border-slate-200 hover:border-indigo-100 transition-colors">
+                            {!readOnly && (
+                                <button className="absolute -top-2 -right-2 bg-white text-red-400 hover:text-red-600 w-6 h-6 rounded-full shadow-sm border flex items-center justify-center transition" onClick={() => { 
+                                    const newHealth = [...student.data.health]; newHealth.splice(hIdx, 1); 
+                                    onChange({...student, data: {...student.data, health: newHealth}}); 
+                                }}>✕</button>
+                            )}
+                            <div className="w-full md:w-32"><label className="text-[10px] font-bold text-slate-400 block mb-1">學期</label><input disabled={readOnly} maxLength={10} className="border-2 border-white p-2 rounded-lg w-full text-sm disabled:bg-white outline-none focus:border-indigo-300" placeholder="114-1" value={h.term} onChange={(e) => updateHealth(hIdx, 'term', e.target.value)} /></div>
+                            <div className="w-20"><label className="text-[10px] text-slate-400 block mb-1 font-bold">身高</label><input disabled={readOnly} maxLength={5} className="border-2 border-white p-2 rounded-lg w-full text-center text-sm disabled:bg-white outline-none focus:border-indigo-300" value={h.h} onChange={(e) => updateHealth(hIdx, 'h', e.target.value)} /></div>
+                            <div className="w-20"><label className="text-[10px] text-slate-400 block mb-1 font-bold">體重</label><input disabled={readOnly} maxLength={5} className="border-2 border-white p-2 rounded-lg w-full text-center text-sm disabled:bg-white outline-none focus:border-indigo-300" value={h.w} onChange={(e) => updateHealth(hIdx, 'w', e.target.value)} /></div>
+                            <div className="flex gap-1 bg-white p-1.5 rounded-lg border-2 border-white shadow-sm">
+                               <div className="w-16"><label className="text-[10px] text-slate-400 block text-center font-bold">裸視(右)</label><input disabled={readOnly} maxLength={3} className="bg-slate-50 p-1 rounded w-full text-center text-xs disabled:bg-white outline-none" value={h.vr} onChange={(e) => updateHealth(hIdx, 'vr', e.target.value)} /></div>
+                               <div className="w-16"><label className="text-[10px] text-slate-400 block text-center font-bold">裸視(left)</label><input disabled={readOnly} maxLength={3} className="bg-slate-50 p-1 rounded w-full text-center text-xs disabled:bg-white outline-none" value={h.vl} onChange={(e) => updateHealth(hIdx, 'vl', e.target.value)} /></div>
+                            </div>
+                            <div className="flex gap-1 bg-white p-1.5 rounded-lg border-2 border-white shadow-sm">
+                               <div className="w-16"><label className="text-[10px] text-slate-400 block text-center font-bold">戴鏡(右)</label><input disabled={readOnly} maxLength={3} className="bg-slate-50 p-1 rounded w-full text-center text-xs disabled:bg-white outline-none" value={h.cvr} onChange={(e) => updateHealth(hIdx, 'cvr', e.target.value)} /></div>
+                               <div className="w-16"><label className="text-[10px] text-slate-400 block text-center font-bold">戴鏡(left)</label><input disabled={readOnly} maxLength={3} className="bg-slate-50 p-1 rounded w-full text-center text-xs disabled:bg-white outline-none" value={h.cvl} onChange={(e) => updateHealth(hIdx, 'cvl', e.target.value)} /></div>
+                            </div>
+                        </div>
+                    ))}
+                    {student.data.health.length === 0 && <div className="text-center py-6 text-slate-300 text-xs italic bg-slate-50 rounded-xl border border-dashed">尚無健康檢查紀錄</div>}
+                </div>
+            </div>
+
+            {/* Section 6: 導師建議 */}
+            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                <div className="font-bold mb-4 text-lg border-b border-dashed border-transparent inline-block">
+                    {student.data.s4_title}
+                </div>
+                <div className="relative">
+                    <textarea 
+                        className="w-full border rounded-xl p-4 h-32 bg-slate-50 text-sm focus:bg-white transition mb-1 disabled:text-slate-600 disabled:bg-slate-100 outline-none" 
+                        disabled={readOnly} 
+                        value={student.data.advice} 
+                        maxLength={LIMITS.ADVICE}
+                        onChange={(e) => handleChange('advice', e.target.value)}
+                    />
+                    <CharCounter current={student.data.advice} limit={LIMITS.ADVICE} />
+                </div>
+            </div>
+        </div>
+    );
+};
+
+
+
+
+
+
+
+        // 4.4 SwipeableStudentItem Component (With Pointer Events)
+        const SwipeableStudentItem = ({ student, onDelete, isDeleting }) => {
+            const [offsetX, setOffsetX] = useState(0);
+            const [isSwiped, setIsSwiped] = useState(false);
+            const startX = useRef(0);
+            const isDragging = useRef(false);
+
+            const handlePointerDown = (e) => {
+                if (isDeleting) return;
+                startX.current = e.clientX;
+                isDragging.current = true;
+                e.currentTarget.setPointerCapture(e.pointerId);
+            };
+
+            const handlePointerMove = (e) => {
+                if (!isDragging.current) return;
+                const diff = e.clientX - startX.current;
+                if (diff < 0) {
+                    setOffsetX(Math.max(diff, -100));
+                } else if (isSwiped && diff > 0) {
+                    setOffsetX(Math.min(-80 + diff, 0));
+                }
+            };
+
+            const handlePointerUp = (e) => {
+                isDragging.current = false;
+                e.currentTarget.releasePointerCapture(e.pointerId);
+                if (offsetX < -50) {
+                    setOffsetX(-80);
+                    setIsSwiped(true);
+                } else {
+                    setOffsetX(0);
+                    setIsSwiped(false);
+                }
+            };
+
+            return (
+                <div className="relative h-16 mb-3 overflow-hidden rounded-xl select-none group">
+                    <div className="absolute inset-y-0 right-0 w-20 bg-red-600 flex flex-col items-center justify-center text-white cursor-pointer active:bg-red-700 transition-colors" onClick={() => onDelete(student.id, student.name)}>
+                        <Trash2 size={20} className="mb-1" />
+                        <span className="text-[10px] font-bold">確認刪除</span>
+                    </div>
+                    <div onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp} style={{ transform: `translateX(${offsetX}px)` }} className={`absolute inset-0 bg-white border border-slate-200 rounded-xl flex items-center justify-between p-4 shadow-sm transition-transform duration-200 ease-out touch-pan-y ${isSwiped ? 'border-red-200' : 'group-hover:border-indigo-200'}`}>
+                        <div className="flex items-center gap-4 pointer-events-none">
+                            <GripVertical size={16} className="text-slate-300" />
+                            <span className="bg-indigo-50 w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold border border-indigo-100 text-indigo-600">{student.no}</span>
+                            <span className="font-bold text-slate-700 text-base">{student.name}</span>
+                        </div>
+                        <div className="flex items-center gap-2 pointer-events-none">
+                            {isDeleting ? <div className="flex items-center gap-2 text-indigo-500"><Loader2 size={16} className="animate-spin" /><span className="text-xs font-bold">刪除中...</span></div> : <div className={`flex items-center gap-1 text-slate-300 transition-opacity ${isSwiped ? 'opacity-0' : 'opacity-0 group-hover:opacity-100'}`}><span className="text-[10px]">左滑管理</span><ChevronRight size={14} /></div>}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // 4.5 AdminDashboard Component
+        const AdminDashboard = ({ onLogout, onViewClass, onViewStudent, userRole }) => {
+            const [years, setYears] = useState([]);
+            const [selectedYearId, setSelectedYearId] = useState('');
+            const [loading, setLoading] = useState(true);
+            const [searchTerm, setSearchTerm] = useState('');
+            const [resetModal, setResetModal] = useState({show: false, username: ''});
+            const [editModal, setEditModal] = useState({show: false, classId: '', name: '', mentor: ''});
+            const [importModal, setImportModal] = useState({show: false, classId: '', className: ''});
+            const [studentListModal, setStudentListModal] = useState({show: false, classId: '', className: '', students: []});
+            const [configModal, setConfigModal] = useState(false);
+            const [addYearModal, setAddYearModal] = useState(false);
+            const [deleteConfirmModal, setDeleteConfirmModal] = useState({show: false, yearId: '', yearName: ''});
+            const [newPass, setNewPass] = useState('');
+            const [bulkNames, setBulkNames] = useState('');
+            const [gasUrl, setGasUrl] = useState(cloudService.getApiUrl() || '');
+            const [newYearName, setNewYearName] = useState('');
+            const [processingYear, setProcessingYear] = useState(false);
+            const [deletingYear, setDeletingYear] = useState(false);
+            const [deletingStudentId, setDeletingStudentId] = useState(null);
+            const isReadOnly = userRole === UserRole.VIEWER;
+
+            useEffect(() => { loadData(); }, []);
+
+            const loadData = async (targetYearId) => {
+                setLoading(true);
+                const yearList = await cloudService.getAllYears();
+                setYears(yearList);
+                if (yearList.length > 0) {
+                    if (targetYearId && yearList.some(y => y.id === targetYearId)) {
+                        setSelectedYearId(targetYearId);
+                    } else if (!selectedYearId || !yearList.some(y => y.id === selectedYearId)) {
+                        setSelectedYearId(yearList[yearList.length - 1].id);
+                    }
+                } else {
+                    setSelectedYearId('');
+                }
+                setLoading(false);
+            };
+
+            const selectedYear = useMemo(() => years.find(y => y.id === selectedYearId), [years, selectedYearId]);
+
+            const filteredStudents = useMemo(() => {
+                if (!searchTerm.trim()) return [];
+                const term = searchTerm.toLowerCase();
+                const results = [];
+                years.forEach(year => {
+                    year.classes.forEach(cls => {
+                        cls.students.forEach(std => {
+                            if (std.name.includes(term) || std.no.includes(term)) {
+                                results.push({ student: std, classId: cls.id, className: cls.name, yearId: year.id });
+                            }
+                        });
+                    });
+                });
+                return results;
+            }, [years, searchTerm]);
+
+            const handleAddYear = async () => {
+                if (!newYearName.trim()) return;
+                setProcessingYear(true);
+                try {
+                    const success = await cloudService.addYear(newYearName);
+                    if (success) {
+                        setNewYearName('');
+                        setAddYearModal(false);
+                        await loadData();
+                        alert(`✅ 成功建立「${newYearName}」資料庫！`);
+                    } else {
+                        alert("⚠️ 建立失敗：無法同步至雲端 (GAS)。請檢查連線設定。");
+                    }
+                } catch (error) {
+                    alert("❌ 發生未預期的錯誤");
+                } finally {
+                    setProcessingYear(false);
+                }
+            };
+
+            const requestDeleteYear = (id, name) => setDeleteConfirmModal({ show: true, yearId: id, yearName: name });
+
+            const confirmDeleteYear = async () => {
+                setDeletingYear(true);
+                const { yearId } = deleteConfirmModal;
+                try {
+                    const success = await cloudService.deleteYear(yearId);
+                    if (success) {
+                        if (selectedYearId === yearId) setSelectedYearId('');
+                        await loadData();
+                        setDeleteConfirmModal({ show: false, yearId: '', yearName: '' });
+                    } else {
+                        alert("❌ 刪除失敗：無法同步至雲端，請重試。");
+                    }
+                } catch (error) {
+                    alert("❌ 刪除時發生錯誤。");
+                } finally {
+                    setDeletingYear(false);
+                }
+            };
+
+            const handleSaveConfig = () => {
+                cloudService.setApiUrl(gasUrl);
+                setConfigModal(false);
+                loadData();
+            };
+
+            const handlePasswordReset = async () => {
+                await cloudService.updatePassword(resetModal.username, newPass);
+                alert("密碼已更新");
+                setResetModal({show: false, username: ''});
+                setNewPass('');
+            };
+
+            const handleClassUpdate = async () => {
+                if (!selectedYearId || !editModal.classId) return;
+                await cloudService.updateClassMetadata(selectedYearId, editModal.classId, editModal.name, editModal.mentor);
+                setEditModal({show: false, classId: '', name: '', mentor: ''});
+                loadData(selectedYearId);
+            };
+
+            const handleBulkImport = async () => {
+                const currentClass = await cloudService.getClassData(selectedYearId, importModal.classId);
+                if(!currentClass) return;
+                const lines = bulkNames.split('\n').map(l => l.trim()).filter(l => l);
+                let nextNo = currentClass.students.length + 1;
+                const newStudents = lines.map(name => ({
+                    id: Math.random().toString(36).substr(2, 9),
+                    no: (nextNo++).toString().padStart(2, '0'),
+                    name: name,
+                    data: {
+                        health: [], indicators: [], subGrades: {},
+                        attendance: { total_days: "", official_leave: "", personal_leave: "", sick_leave: "", funeral_leave: "", late_count: "", actual_days: "" },
+                        s2_title: "二、個人整體樣貌", s4_title: "六、導師整體建議", overall: "", advice: ""
+                    }
+                }));
+                const updatedClass = { ...currentClass, students: [...currentClass.students, ...newStudents] };
+                await cloudService.saveClassData(selectedYearId, importModal.classId, updatedClass);
+                setImportModal({show: false, classId: '', className: ''});
+                setBulkNames('');
+                loadData(selectedYearId);
+            };
+
+            const handleDeleteStudent = async (studentId, studentName) => {
+                if (!selectedYearId || !studentListModal.classId) return;
+                setDeletingStudentId(studentId);
+                try {
+                    const success = await cloudService.deleteStudent(selectedYearId, studentListModal.classId, studentId);
+                    if (success) {
+                        setStudentListModal(prev => ({ 
+                            ...prev, 
+                            students: prev.students.filter(s => s.id !== studentId) 
+                        }));
+                        await loadData(selectedYearId);
+                    } else {
+                        alert("❌ 刪除失敗：雲端資料庫更新未完成，請檢查連線設定。");
+                    }
+                } catch (error) {
+                    alert("❌ 刪除過程中發生未預期的錯誤。");
+                } finally {
+                    setDeletingStudentId(null);
+                }
+            };
+
+            return (
+                <div className="min-h-screen bg-slate-50 font-sans">
+                    <nav className="h-16 bg-slate-900 text-white flex items-center justify-between px-6 shadow-md sticky top-0 z-50">
+                        <div className="flex items-center gap-4">
+                            <h1 className="text-xl font-bold text-indigo-400">均一評量系統管理</h1>
+                            <span className="text-[10px] bg-indigo-500/20 text-indigo-300 px-2 py-0.5 rounded border border-indigo-500/30">{isReadOnly ? '觀看模式' : '主要管理帳號'}</span>
+                        </div>
+                        <div className="flex gap-2">
+                            {!isReadOnly && <button onClick={() => setConfigModal(true)} title="雲端連線設定" className="bg-slate-700 hover:bg-slate-600 p-2 rounded transition"><Settings size={18} /></button>}
+                            <button onClick={onLogout} className="bg-red-600 hover:bg-red-700 px-4 py-2 rounded text-sm transition font-bold">登出</button>
+                        </div>
+                    </nav>
+                    <main className="max-w-6xl mx-auto p-8">
+                        <div className="mb-8 relative z-40">
+                            <div className="flex items-center bg-white p-3 rounded-2xl shadow-sm border border-slate-200">
+                                <Search className="text-slate-400 ml-2" size={20} />
+                                <input type="text" placeholder="搜尋全校學生 (可跨學年搜尋)" className="w-full p-2 outline-none text-slate-700 font-medium" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+                            </div>
+                            {searchTerm && (
+                                <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-xl shadow-xl border border-slate-100 max-h-60 overflow-y-auto z-50 animate-in fade-in slide-in-from-top-2">
+                                    {filteredStudents.length > 0 ? filteredStudents.map((item, idx) => (
+                                        <button key={idx} onClick={() => onViewStudent && onViewStudent(item.yearId, item.classId, item.student.id)} className="w-full text-left px-4 py-3 hover:bg-indigo-50 border-b border-slate-50 flex justify-between items-center group transition">
+                                            <div className="flex items-center gap-3"><span className="bg-indigo-100 text-indigo-600 w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold">{item.student.no}</span><span className="font-bold text-slate-700">{item.student.name}</span></div>
+                                            <span className="text-xs text-slate-400 bg-slate-100 px-2 py-1 rounded">{item.className}</span>
+                                        </button>
+                                    )) : <div className="p-4 text-center text-slate-400 italic">找不到學生資料</div>}
+                                </div>
+                            )}
+                        </div>
+                        <div className="flex items-center justify-between mb-8 border-b border-slate-200 pb-2">
+                            <div className="flex gap-2 overflow-x-auto pb-1 items-end">
+                                {years.map(y => (
+                                    <div key={y.id} className="relative group">
+                                        <button onClick={() => setSelectedYearId(y.id)} className={`px-4 py-3 rounded-t-xl font-bold text-sm transition-all whitespace-nowrap flex items-center gap-2 ${selectedYearId === y.id ? 'bg-white text-indigo-600 border-x border-t border-slate-200 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]' : 'text-slate-400 hover:text-slate-600 translate-y-1'}`}><Calendar size={14} /> {y.name}</button>
+                                        {!isReadOnly && <button onClick={(e) => {e.stopPropagation(); requestDeleteYear(y.id, y.name)}} className={`absolute -top-1 -right-1 bg-red-500 text-white p-1 rounded-full transition shadow-md z-10 border border-red-200 scale-0 group-hover:scale-100 ${selectedYearId === y.id ? 'scale-100' : ''}`} title="永久刪除此學期資料"><Trash2 size={10} strokeWidth={3} /></button>}
+                                    </div>
+                                ))}
+                            </div>
+                            {!isReadOnly && <button onClick={() => setAddYearModal(true)} className="flex items-center gap-1 bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-indigo-700 transition shadow-sm"><Plus size={16} /> 新增學年資料庫</button>}
+                        </div>
+                        {loading ? <div className="text-center py-20 text-slate-400 animate-pulse">資料同步中，請稍候...</div> : selectedYear ? (
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                {selectedYear.classes.map((cls) => (
+                                    <div key={cls.id} className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 flex flex-col justify-between hover:shadow-xl transition-all group border-t-4 border-t-indigo-500">
+                                        <div>
+                                            <div className="flex justify-between items-start mb-4">
+                                                <div className="flex items-center gap-2"><h3 className="text-xl font-bold text-slate-900">{cls.name}</h3>{!isReadOnly && <button onClick={() => setEditModal({show: true, classId: cls.id, name: cls.name, mentor: cls.settings.mentor})} className="text-slate-300 hover:text-indigo-600 transition" title="編輯班級名稱或導師"><Pencil size={14} /></button>}</div>
+                                                <span className="bg-indigo-50 text-indigo-600 text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider">{cls.students.length} 名學生</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-sm text-slate-500 mb-4 bg-slate-50 p-2 rounded-lg"><Users size={14} className="text-slate-400" /><span className="font-medium">導師：{cls.settings.mentor}</span></div>
+                                        </div>
+                                        <div className="space-y-2 mt-auto pt-4 border-t border-slate-100">
+                                            <button onClick={() => onViewClass(selectedYearId, cls.id)} className="w-full bg-slate-900 text-white hover:bg-slate-800 py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition shadow-md"><ChevronRight size={16} /> 進入全班資料庫</button>
+                                            {!isReadOnly && (
+                                                <div className="flex gap-2">
+                                                    <button onClick={() => setImportModal({show: true, classId: cls.id, className: cls.name})} className="flex-1 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1 transition"><UserPlus size={14} /> 匯入名單</button>
+                                                    <button onClick={() => setStudentListModal({show: true, classId: cls.id, className: cls.name, students: cls.students})} className="flex-1 bg-blue-50 text-blue-700 hover:bg-blue-100 py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1 transition"><Users size={14} /> 刪減學生</button>
+                                                    <button onClick={() => setResetModal({show: true, username: cls.id})} className="w-12 bg-slate-100 text-slate-500 hover:bg-slate-200 rounded-xl flex items-center justify-center transition" title="重設導師密碼"><Key size={16} /></button>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        ) : <div className="flex flex-col items-center justify-center py-20 text-slate-400"><AlertCircle size={48} className="mb-4 opacity-20" /><p>目前尚無任何學期資料，請點擊右上方按鈕新增。</p></div>}
+                    </main>
+
+                    {studentListModal.show && (
+                        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[60]">
+                            <div className="bg-white p-8 rounded-3xl w-[600px] max-h-[80vh] flex flex-col shadow-2xl animate-in fade-in zoom-in duration-200">
+                                <div className="flex justify-between items-center mb-6">
+                                    <div><h3 className="text-xl font-black text-slate-900">{studentListModal.className} 名單管理</h3><p className="text-xs text-slate-400 mt-1 flex items-center gap-1"><Hand size={12} /> 請向左滑動學生列表以顯示刪除按鈕</p></div>
+                                    <button onClick={() => setStudentListModal({...studentListModal, show: false})} className="p-2 hover:bg-slate-100 rounded-full transition-colors"><X size={20} /></button>
+                                </div>
+                                <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar pb-10">
+                                    {studentListModal.students.map(s => <SwipeableStudentItem key={s.id} student={s} onDelete={handleDeleteStudent} isDeleting={deletingStudentId === s.id} />)}
+                                    {studentListModal.students.length === 0 && <div className="flex flex-col items-center justify-center py-20 opacity-30"><Users size={48} className="mb-2" /><p className="font-bold">目前尚無學生名單</p></div>}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Other Modals (Simplified for brevity, same logic as React code) */}
+                    {addYearModal && <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[60]"><div className="bg-white p-8 rounded-3xl w-96 shadow-2xl animate-in zoom-in duration-200"><h3 className="text-xl font-bold mb-2 text-indigo-600 flex items-center gap-2"><Plus size={24} /> 建立新學期</h3><p className="text-xs text-slate-400 mb-6">系統將自動產生 7 個標準班級範本並同步至雲端。</p><div className="mb-8"><label className="text-xs font-bold text-slate-500 block mb-2">學年度名稱</label><input type="text" placeholder="例如：114學年度" className="w-full border-2 border-slate-100 p-4 rounded-xl outline-none focus:border-indigo-500 transition-colors font-bold text-slate-700" value={newYearName} onChange={(e) => setNewYearName(e.target.value)} autoFocus /></div><div className="flex gap-3"><button onClick={() => setAddYearModal(false)} className="flex-1 py-3 text-slate-500 font-bold hover:bg-slate-50 rounded-xl transition">取消</button><button onClick={handleAddYear} disabled={processingYear} className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold shadow-lg flex items-center justify-center">{processingYear ? <Loader2 size={16} className="animate-spin" /> : '確認建立'}</button></div></div></div>}
+                    
+                    {deleteConfirmModal.show && <div className="fixed inset-0 bg-red-900/40 backdrop-blur-sm flex items-center justify-center z-[70]"><div className="bg-white p-8 rounded-3xl w-[450px] shadow-2xl animate-in zoom-in duration-200 border-t-8 border-red-500"><div className="flex items-start gap-4 mb-6"><div className="bg-red-100 text-red-600 p-3 rounded-full"><AlertTriangle size={32} /></div><div><h3 className="text-xl font-black text-slate-900">學年度刪除確認</h3><p className="text-sm text-slate-500 mt-1">此動作將清除該年度所有班級與學生資料，無法復原。</p></div></div><div className="bg-slate-50 p-4 rounded-xl border border-slate-200 mb-8 text-sm text-slate-700 space-y-2"><p>您即將刪除：<span className="font-bold text-red-600 text-lg">{deleteConfirmModal.yearName}</span></p></div><div className="flex gap-3"><button onClick={() => setDeleteConfirmModal({show: false, yearId: '', yearName: ''})} className="flex-1 py-3 bg-slate-100 text-slate-600 rounded-xl font-bold hover:bg-slate-200 transition">取消</button><button onClick={confirmDeleteYear} disabled={deletingYear} className="flex-1 py-3 bg-red-600 text-white rounded-xl font-bold shadow-lg hover:bg-red-700 transition flex items-center justify-center gap-2">{deletingYear ? <Loader2 size={16} className="animate-spin" /> : '確認刪除'}</button></div></div></div>}
+
+                    {configModal && <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[60]"><div className="bg-white p-8 rounded-3xl w-[550px] shadow-2xl"><h3 className="text-xl font-bold mb-4 flex items-center gap-2 text-indigo-600"><Cloud /> 雲端連線設定</h3><p className="text-xs text-slate-400 mb-4">請填入 Google Apps Script Web App 的部署網址，確保資料能同步至雲端試算表。</p><input type="text" value={gasUrl} onChange={(e) => setGasUrl(e.target.value)} placeholder="https://script.google.com/macros/s/.../exec" className="w-full border-2 border-slate-100 p-4 rounded-xl mb-8 text-sm outline-none focus:border-indigo-500 font-mono" /><div className="flex gap-3 justify-end"><button onClick={() => setConfigModal(false)} className="px-6 py-2 text-slate-500 font-bold hover:bg-slate-50 rounded-xl transition">取消</button><button onClick={handleSaveConfig} className="px-8 py-2 bg-slate-900 text-white rounded-xl font-bold shadow-lg hover:bg-slate-800 transition">儲存並刷新</button></div></div></div>}
+
+                    {editModal.show && <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[60]"><div className="bg-white p-8 rounded-3xl w-[400px] shadow-2xl animate-in zoom-in duration-200"><h3 className="text-xl font-bold mb-6 flex items-center gap-2"><Pencil className="text-indigo-600" size={20} /> 修改班級資訊</h3><div className="space-y-4 mb-8"><div><label className="text-xs font-bold text-slate-400 block mb-1">班級名稱</label><input type="text" className="w-full border-2 border-slate-100 p-3 rounded-xl focus:border-indigo-500 outline-none transition" value={editModal.name} onChange={(e) => setEditModal({...editModal, name: e.target.value})} /></div><div><label className="text-xs font-bold text-slate-400 block mb-1">導師姓名</label><input type="text" className="w-full border-2 border-slate-100 p-3 rounded-xl focus:border-indigo-500 outline-none transition" value={editModal.mentor} onChange={(e) => setEditModal({...editModal, mentor: e.target.value})} /></div></div><div className="flex gap-3"><button onClick={() => setEditModal({show: false, classId: '', name: '', mentor: ''})} className="flex-1 py-3 text-slate-500 font-bold hover:bg-slate-50 rounded-xl transition">取消</button><button onClick={handleClassUpdate} className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold shadow-lg transition hover:bg-indigo-700">儲存變更</button></div></div></div>}
+
+                    {importModal.show && <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60]"><div className="bg-white p-8 rounded-3xl w-[500px] shadow-2xl animate-in zoom-in duration-200"><h3 className="text-xl font-bold mb-2">批次匯入學生名單</h3><p className="text-xs text-slate-400 mb-4">每一行輸入一個姓名，系統將自動編號並加入班級。</p><textarea placeholder="張曉明&#10;李小華&#10;王大同" className="w-full border-2 border-slate-100 p-4 rounded-xl mb-6 h-60 outline-none focus:border-indigo-500 transition-colors font-mono text-sm leading-relaxed" value={bulkNames} onChange={(e) => setBulkNames(e.target.value)} /><div className="flex gap-3"><button onClick={() => setImportModal({show: false, classId: '', className: ''})} className="flex-1 py-3 text-slate-500 font-bold hover:bg-slate-50 rounded-xl transition">取消</button><button onClick={handleBulkImport} className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold shadow-lg hover:bg-indigo-700 transition">確認匯入</button></div></div></div>}
+
+                    {resetModal.show && <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60]"><div className="bg-white p-8 rounded-3xl w-96 shadow-2xl animate-in zoom-in duration-200"><h3 className="text-xl font-bold mb-4">重設導師登入密碼</h3><p className="text-xs text-slate-400 mb-4">修改後，導師需使用新密碼進行登入作業。</p><input type="text" value={newPass} onChange={(e) => setNewPass(e.target.value)} placeholder="輸入新密碼" className="w-full border-2 border-slate-100 p-3 rounded-xl mb-8 outline-none focus:border-indigo-500 font-bold text-center text-lg tracking-widest" /><div className="flex gap-2"><button onClick={() => setResetModal({show: false, username: ''})} className="flex-1 py-3 text-slate-500 font-bold hover:bg-slate-50 rounded-xl transition">取消</button><button onClick={handlePasswordReset} className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold shadow-lg transition hover:bg-indigo-700">確認更新</button></div></div></div>}
+                </div>
+            );
+        };
+
+        // 4.6 ClassroomEditor Component
+        const ClassroomEditor = ({ yearId, classId, userRole, onLogout, onBackToAdmin, readOnly = false, initialStudentId }) => {
+            const [data, setData] = useState(null);
+            const [loading, setLoading] = useState(true);
+            const [saving, setSaving] = useState(false);
+            const [currentStudentIdx, setCurrentStudentIdx] = useState(-1);
+            const [viewMode, setViewMode] = useState('welcome');
+            const [dirty, setDirty] = useState(false);
+
+            const [lastSaved, setLastSaved] = useState(null);
+
+// 在 ClassroomEditor 組件內加入這個 useEffect切換學生時自動置頂
+useEffect(() => {
+    const mainContent = document.querySelector('main');
+    if (mainContent) mainContent.scrollTop = 0;
+}, [currentStudentIdx]);
+
+// 在 ClassroomEditor 組件內部加入這段
+useEffect(() => {
+    const handleBeforeUnload = (e) => {
+        if (dirty) {
+            e.preventDefault();
+            // 現代瀏覽器需要設置 returnValue 才會觸發警告
+            e.returnValue = "您有尚未儲存的變更，確定要離開嗎？";
+        }
+    };
+
+    // 監聽瀏覽器關閉/重新整理事件
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    
+    // 組件卸載時移除監聽，避免記憶體洩漏
+    return () => {
+        window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+}, [dirty]); // 當 dirty 狀態改變時重新綁定邏輯
+
+            useEffect(() => { loadClassData(); }, [yearId, classId]);
+            useEffect(() => {
+    if (data && initialStudentId) {
+        const idx = data.students.findIndex(s => s.id === initialStudentId);
+        if (idx !== -1) { 
+            setCurrentStudentIdx(idx); 
+            // 同步判斷：觀看者進入預覽，其餘進入編輯
+            setViewMode(userRole === UserRole.VIEWER ? 'preview' : 'editor'); 
+        }
+    }
+}, [data, initialStudentId, userRole]); // 記得把 userRole 加入依賴陣列
+
+            const loadClassData = async () => {
+                setLoading(true);
+                const result = await cloudService.getClassData(yearId, classId);
+                if (result) {
+                    if (!result.settings.section2Indicators) result.settings.section2Indicators = ["整潔習慣", "人際互動", "團體合作", "自主學習"];
+                    if (!result.settings.levels) result.settings.levels = ["卓越", "優異", "通過", "加油"];
+                    result.students.forEach(s => { if (s.data.s2_title === "二、個人整體樣貌與專題表現") s.data.s2_title = "二、個人整體樣貌"; });
+                    setData(result);
+                }
+                setLoading(false);
+                setDirty(false);
+            };
+
+            const saveData = async () => {
+                if (!data || readOnly) return;
+                setSaving(true);
+                // 使用修正後的 saveClassData (atomic save)
+                const success = await cloudService.saveClassData(yearId, classId, data);
+                setSaving(false);
+                if (success) { 
+                    setDirty(false); 
+                    setLastSaved(new Date().toLocaleTimeString()); // 紀錄時間
+                    alert("✅ 資料已成功同步至 GAS 雲端資料庫 (防覆蓋機制啟用)"); 
+                } else { 
+                    alert("❌ 儲存失敗，請檢查網路連線或 GAS 網址設定"); 
+                }
+            };
+
+            const handleStudentSelect = (idx) => {
+    setCurrentStudentIdx(idx);
+    // 如果是觀看者身分，直接進入預覽模式；否則進入編輯模式
+    setViewMode(userRole === UserRole.VIEWER ? 'preview' : 'editor');
+};
+
+            const handleAddStudent = () => {
+                if (!data || readOnly) return;
+                const name = prompt("請輸入學生姓名：");
+                if (!name) return;
+                const newStudent = { id: Math.random().toString(36).substr(2, 9), no: (data.students.length + 1).toString().padStart(2, '0'), name, data: { health: [], attendance: { total_days: "", official_leave: "", personal_leave: "", sick_leave: "", funeral_leave: "", late_count: "", actual_days: "" }, indicators: [], subGrades: {}, s2_title: "二、個人整體樣貌", s4_title: "六、導師整體建議", overall: "", advice: "" } };
+                const newData = { ...data, students: [...data.students, newStudent] };
+                setData(newData); setDirty(true); setCurrentStudentIdx(newData.students.length - 1); setViewMode('editor');
+            };
+
+            const handleClassSettingChange = (field, value) => {
+                if (!data || readOnly) return;
+                setData({ ...data, settings: { ...data.settings, [field]: value } });
+                setDirty(true);
+            };
+
+            const handleUpdateSubject = (idx, updated) => {
+                if (!data || readOnly) return;
+                const newSubjects = [...data.settings.subjects];
+                newSubjects[idx] = updated;
+                handleClassSettingChange('subjects', newSubjects);
+            };
+
+            if (loading || !data) return <div className="flex flex-col h-screen items-center justify-center bg-slate-50 gap-4"><Loader2 className="w-10 h-10 text-indigo-500 animate-spin" /><span className="text-slate-400 font-bold tracking-widest uppercase text-xs">正在從雲端載入資料庫...</span></div>;
+
+            return (
+                <>
+                    <div className="flex h-screen bg-slate-100 overflow-hidden screen-only-layout">
+                        <nav className="fixed top-0 left-0 right-0 h-16 bg-slate-900 text-white flex items-center justify-between px-6 z-50 shadow-md">
+                            <div className="flex items-center gap-4">
+                                {(userRole === UserRole.ADMIN || userRole === UserRole.VIEWER) && onBackToAdmin && <button onClick={onBackToAdmin} title="回管理介面" className="bg-slate-700 p-2 rounded-lg hover:bg-slate-600 transition-all active:scale-95"><ArrowLeft size={18} /></button>}
+                                <h1 className="text-xl font-bold text-indigo-400">{data.name} <span className="text-white text-xs font-normal opacity-70">| {data.settings.year}</span></h1>
+                                {dirty && !readOnly && <span className="text-[10px] bg-amber-500 text-black px-2 py-0.5 rounded-full font-black tracking-tighter shadow-lg animate-pulse">雲端待同步</span>}
+                            </div>
+                            <div className="flex gap-2">
+                                <div className="flex items-center gap-4">
+    {/* 顯示最後存檔成功的時間 */}
+    {!dirty && lastSaved && (
+        <span className="text-[10px] text-emerald-500 font-bold animate-in fade-in slide-in-from-right-2">
+            ✅ 已於 {lastSaved} 完成存檔
+        </span>
+    )}
+
+    {!readOnly && (
+        <button 
+            onClick={saveData} 
+            disabled={saving || !dirty} 
+            className={`flex items-center gap-2 px-5 py-2 rounded-xl text-sm font-black transition-all shadow-xl active:scale-95 ${
+                saving ? 'bg-indigo-400 cursor-wait' : 
+                dirty ? 'bg-indigo-600 hover:bg-indigo-500' : 
+                'bg-slate-700 opacity-50 cursor-not-allowed'
+            }`}
+        >
+            {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />} 
+            {saving ? '同步中...' : '儲存至雲端'}
+        </button>
+    )}
+</div>
+                                <button onClick={onLogout} className="bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded-xl text-sm transition font-bold">登出</button>
+                            </div>
+                        </nav>
+                        <aside className="w-64 bg-white border-r pt-16 pb-4 px-4 flex flex-col fixed top-0 bottom-0 left-0 overflow-y-auto z-40">
+                             <div className="py-6 mb-4 border-b border-slate-50 flex items-center justify-center"><div className="w-full px-2 flex items-center justify-center"><img src="https://junyi.tw/sites/default/files/logo--junyi-header-2020--w300@2x.png" alt="均一 Logo" className="max-h-12 object-contain"/></div></div>
+                             <div className="mb-6 space-y-1">
+                                <button onClick={() => setViewMode('welcome')} className={`w-full text-left px-3 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 transition-all ${viewMode === 'welcome' ? 'bg-slate-100 text-slate-900' : 'text-slate-500 hover:bg-slate-50'}`}><Users size={16} /> 班級概況</button>
+                                <button onClick={() => setViewMode('settings')} className={`w-full text-left px-3 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 transition-all ${viewMode === 'settings' ? 'bg-indigo-50 text-indigo-700 shadow-sm' : 'text-slate-500 hover:bg-slate-50'}`}><Settings size={16} /> 班級設定</button>
+                                <button onClick={() => setViewMode('subjects')} className={`w-full text-left px-3 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 transition-all ${viewMode === 'subjects' ? 'bg-indigo-50 text-indigo-700 shadow-sm' : 'text-slate-500 hover:bg-slate-50'}`}><BookOpen size={16} /> 課程指標管理</button>
+                             </div>
+                             <div className="flex-1 overflow-y-auto mt-2 border-t pt-4">
+                                <div className="flex justify-between items-center mb-3 px-1"><span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">學生名單 ({data.students.length})</span>{!readOnly && <button onClick={handleAddStudent} title="新增學生" className="text-indigo-600 p-1 hover:bg-indigo-50 rounded-lg transition-all"><Plus size={18} /></button>}</div>
+                                <div className="space-y-1 pb-10">
+                                    {data.students.length > 0 ? data.students.map((s, idx) => (<button key={s.id} onClick={() => handleStudentSelect(idx)} className={`w-full text-left px-3 py-2.5 rounded-xl text-sm transition-all flex items-center gap-3 ${currentStudentIdx === idx && viewMode === 'editor' ? 'bg-indigo-600 text-white font-bold shadow-lg' : 'hover:bg-slate-50 text-slate-600'}`}><span className={`font-mono text-[10px] w-6 h-6 flex items-center justify-center rounded-lg ${currentStudentIdx === idx && viewMode === 'editor' ? 'bg-indigo-500/50' : 'bg-slate-100 text-slate-400'}`}>{s.no}</span><span className="truncate">{s.name}</span></button>)) : <div className="text-center py-10 text-slate-300 text-xs italic">尚無學生名單</div>}
+                                </div>
+                             </div>
+                        </aside>
+                        <main className="flex-1 ml-64 mt-16 p-8 overflow-y-auto h-[calc(100vh-4rem)]">
+                            {viewMode === 'welcome' && (
+                                <div className="max-w-4xl mx-auto animate-in fade-in duration-500">
+                                    <div className="bg-white rounded-3xl p-10 shadow-sm border border-slate-200 mb-8">
+                                        <div className="flex items-center gap-6 mb-8">
+                                            <div className="bg-indigo-50 p-4 rounded-2xl"><Users size={48} className="text-indigo-600" /></div>
+                                            <div>
+                                                <h2 className="text-3xl font-black text-slate-900">{data.name} 導師工作台</h2>
+                                                <p className="text-slate-500 font-medium">請由左側選單選擇學生進行評量編寫，或調整班級評量指標。</p>
+                                            </div>
+                                        </div>
+                                        <div className="grid grid-cols-3 gap-6">
+                                            <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100">
+                                                <div className="text-xs font-black text-slate-400 uppercase mb-2">學生人數</div>
+                                                <div className="text-4xl font-black text-slate-800">{data.students.length} <span className="text-sm font-normal text-slate-400">名</span></div>
+                                            </div>
+                                            <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100">
+                                                <div className="text-xs font-black text-slate-400 uppercase mb-2">學科指標</div>
+                                                <div className="text-4xl font-black text-slate-800">{data.settings.subjects.length} <span className="text-sm font-normal text-slate-400">科</span></div>
+                                            </div>
+                                            <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100">
+                                                <div className="text-xs font-black text-slate-400 uppercase mb-2">學期學年</div>
+                                                <div className="text-xl font-black text-indigo-600 mt-2">{data.settings.year}</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-8">
+                                        <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-200">
+                                            <h3 className="text-lg font-bold mb-4 flex items-center gap-2"><CheckCircle2 className="text-emerald-500" /> 系統快速提醒</h3>
+                                            <ul className="space-y-3 text-sm text-slate-600 font-medium">
+                                                <li className="flex gap-2"><span>•</span> 修改完畢請記得點擊右上角「儲存至雲端」按鈕。</li>
+                                                <li className="flex gap-2"><span>•</span> 您可以透過「學科管理」自定義評量項目的名稱。</li>
+                                                <li className="flex gap-2"><span>•</span> 列印功能支援 A4 格式，請確保瀏覽器列印設定為「無邊界」。</li>
+                                            </ul>
+                                        </div>
+                                        <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-200">
+                                            <h3 className="text-lg font-bold mb-4 flex items-center gap-2"><Calendar className="text-amber-500" /> 本學期描述</h3>
+                                            <p className="text-sm text-slate-500 leading-relaxed italic line-clamp-4">
+                                                {data.settings.context || "尚未設定班級現況描述..."}
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                            {viewMode === 'settings' && (
+                                <div className="max-w-3xl mx-auto space-y-8 animate-in fade-in duration-300">
+                                    <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-200">
+                                        <h2 className="text-2xl font-bold mb-6 text-slate-900 flex items-center gap-2"><Settings className="text-indigo-600" /> 班級基礎資訊</h2>
+                                        <div className="grid grid-cols-3 gap-6 mb-8">
+                                            <div><label className="text-[10px] font-black text-slate-400 uppercase mb-1 block">學年度</label><input disabled className="w-full border-2 border-slate-100 p-3 rounded-xl bg-slate-50 text-slate-500 font-bold" value={data.settings.year} /></div>
+                                            <div><label className="text-[10px] font-black text-slate-400 uppercase mb-1 block">班級顯示名稱</label><input disabled={readOnly} className="w-full border-2 border-slate-100 p-3 rounded-xl focus:border-indigo-500 outline-none transition" value={data.settings.className} onChange={(e) => handleClassSettingChange('className', e.target.value)} /></div>
+                                            <div><label className="text-[10px] font-black text-slate-400 uppercase mb-1 block">現任導師</label><input disabled={readOnly} className="w-full border-2 border-slate-100 p-3 rounded-xl focus:border-indigo-500 outline-none transition" value={data.settings.mentor} onChange={(e) => handleClassSettingChange('mentor', e.target.value)} /></div>
+                                        </div>
+                                        <div className="mb-8">
+                                            <label className="text-[10px] font-black text-slate-400 uppercase mb-1 block">班級整體現況描述 (顯示於列印第一頁)</label>
+                                            <textarea disabled={readOnly} className="w-full border-2 border-slate-100 p-4 h-64 rounded-2xl focus:border-indigo-500 outline-none transition text-sm leading-relaxed" value={data.settings.context} onChange={(e) => handleClassSettingChange('context', e.target.value)} />
+                                        </div>
+                                    </div>
+                                    <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-200">
+                                        <h3 className="text-xl font-bold mb-4 flex items-center gap-2 text-indigo-600"><Layers size={20} /> 評量等級名稱設定</h3>
+                                        <div className="flex flex-wrap gap-4">
+                                            {data.settings.levels.map((lv, i) => <div key={i} className="flex items-center gap-2 bg-indigo-50 px-4 py-2 rounded-2xl border border-indigo-100 shadow-sm"><input disabled={readOnly} className="bg-transparent text-sm font-bold outline-none w-20 text-indigo-700" value={lv} onChange={(e) => { const newLvs = [...data.settings.levels]; newLvs[i] = e.target.value; handleClassSettingChange('levels', newLvs); }} />{!readOnly && <button onClick={() => { if (data.settings.levels.length <= 1) return; const newLvs = [...data.settings.levels]; newLvs.splice(i, 1); handleClassSettingChange('levels', newLvs); }} className="text-indigo-300 hover:text-red-500 transition-colors"><X size={14} /></button>}</div>)}
+                                            {!readOnly && data.settings.levels.length < 5 && <button onClick={() => handleClassSettingChange('levels', [...data.settings.levels, "新等級"])} className="px-4 py-2 rounded-2xl border-2 border-dashed border-slate-200 text-slate-400 hover:border-indigo-300 hover:text-indigo-500 transition-all text-sm flex items-center gap-1 font-bold"><Plus size={14} /> 增加等級</button>}
+                                        </div>
+                                    </div>
+                                    <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-200">
+                                        <label className="text-[10px] font-black text-slate-400 uppercase mb-3 block tracking-widest">二、個人整體樣貌評量指標</label>
+                                        <div className="flex flex-wrap gap-2">
+                                            {data.settings.section2Indicators.map((ind, i) => (
+                                                <div key={i} className="flex items-center gap-2 bg-slate-100 px-3 py-1.5 rounded-lg border border-slate-200 group">
+                                                    <input disabled={readOnly} className="bg-transparent text-sm font-bold outline-none w-28 focus:text-indigo-600 transition-colors" value={ind} onChange={(e) => { const newInds = [...data.settings.section2Indicators]; newInds[i] = e.target.value; handleClassSettingChange('section2Indicators', newInds); }} />
+                                                    {!readOnly && <button onClick={() => { const newInds = [...data.settings.section2Indicators]; newInds.splice(i, 1); handleClassSettingChange('section2Indicators', newInds); }} className="text-slate-300 hover:text-red-500 transition-colors"><X size={14} /></button>}
+                                                </div>
+                                            ))}
+                                            {!readOnly && <button onClick={() => handleClassSettingChange('section2Indicators', [...data.settings.section2Indicators, "新指標"])} className="px-3 py-1.5 rounded-lg border-2 border-dashed border-slate-200 text-slate-400 hover:border-indigo-300 hover:text-indigo-500 transition-all text-sm flex items-center gap-1 font-bold"><Plus size={14} /> 新增指標項目</button>}
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                            {viewMode === 'subjects' && (
+                                <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-300 pb-20">
+                                    <div className="flex justify-between items-center bg-white p-6 rounded-3xl shadow-sm border border-slate-200"><h2 className="text-2xl font-bold text-slate-900 flex items-center gap-2"><BookOpen className="text-indigo-600" /> 課程指標管理</h2>{!readOnly && <button onClick={() => handleClassSettingChange('subjects', [...data.settings.subjects, {name: "新學科", context: "...", indicators: ["新評量"]}])} className="bg-indigo-600 text-white px-5 py-2 rounded-xl text-sm font-black hover:bg-indigo-700 transition shadow-lg flex items-center gap-2"><Plus size={18} /> 新增學科</button>}</div>
+                                    <div className="grid gap-6">
+                                        {data.settings.subjects.map((sub, idx) => (
+                                            <div key={idx} className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm relative">
+                                                {!readOnly && <button className="absolute top-4 right-4 text-red-400 hover:text-red-600" onClick={() => { const newSubs = [...data.settings.subjects]; newSubs.splice(idx, 1); setData({...data, settings: {...data.settings, subjects: newSubs}}); setDirty(true); }}>刪除</button>}
+                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8"><div><label className="text-[10px] font-black text-slate-400 uppercase mb-1 block tracking-widest">學科名稱 Subject Name</label><input disabled={readOnly} className="w-full text-xl font-bold border-b-2 border-slate-100 focus:border-indigo-500 outline-none p-2 bg-transparent transition-all" value={sub.name} onChange={(e) => handleUpdateSubject(idx, { ...sub, name: e.target.value })} /></div><div><label className="text-[10px] font-black text-slate-400 uppercase mb-1 block tracking-widest">課程背景 Context</label><textarea disabled={readOnly} className="w-full border-2 border-slate-50 p-2 rounded-xl text-xs bg-slate-50 focus:bg-white focus:border-indigo-100 outline-none h-14 transition-all leading-relaxed" value={sub.context} onChange={(e) => handleUpdateSubject(idx, { ...sub, context: e.target.value })} /></div></div>
+                                                <div><label className="text-[10px] font-black text-slate-400 uppercase mb-3 block flex items-center gap-1 tracking-widest"><ListChecks size={12} /> 學科評量指標細項 Indicators</label><div className="space-y-2">{sub.indicators.map((ind, iIdx) => (<div key={iIdx} className="flex items-center gap-3 bg-slate-50 p-3 rounded-2xl group/ind border border-transparent hover:border-indigo-100 transition-all"><span className="text-slate-300 font-mono text-[10px] w-4">{iIdx + 1}</span><input disabled={readOnly} className="flex-1 bg-transparent border-none outline-none text-sm font-bold focus:text-indigo-600 transition-colors" value={ind} onChange={(e) => { const newInds = [...sub.indicators]; newInds[iIdx] = e.target.value; handleUpdateSubject(idx, { ...sub, indicators: newInds }); }} />{!readOnly && <button onClick={() => handleUpdateSubject(idx, { ...sub, indicators: sub.indicators.filter((_, i) => i !== iIdx) })} className="text-slate-300 hover:text-red-400 opacity-100 md:opacity-0 group-hover/ind:opacity-100 transition-all"><X size={16} /></button>}</div>))}{!readOnly && <button onClick={() => handleUpdateSubject(idx, { ...sub, indicators: [...sub.indicators, "新評量項目"] })} className="w-full py-3 rounded-2xl border-2 border-dashed border-slate-100 text-slate-400 hover:border-indigo-200 hover:text-indigo-500 hover:bg-indigo-50/30 transition-all text-xs font-black flex items-center justify-center gap-1.5"><Plus size={14} /> 新增指標細項</button>}</div></div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                            {viewMode === 'editor' && currentStudentIdx !== -1 && (
+                                <div className="max-w-5xl mx-auto animate-in zoom-in-95 duration-300 pb-20">
+                                    <header className="flex justify-between items-end mb-6 bg-white p-8 rounded-3xl shadow-sm border border-slate-200">
+                                        <div className="flex gap-10"><div><label className="text-[10px] font-black text-slate-400 block uppercase tracking-widest mb-1 ml-1">學號 / 座號</label><input disabled={readOnly} type="text" className="text-3xl font-black text-indigo-600 bg-slate-50 border-b-2 border-slate-100 hover:border-indigo-300 focus:border-indigo-500 focus:bg-white outline-none w-20 px-2 py-1 rounded-lg transition-all" value={data.students[currentStudentIdx].no} onChange={(e) => { const newS = [...data.students]; newS[currentStudentIdx] = { ...newS[currentStudentIdx], no: e.target.value }; setData({ ...data, students: newS }); setDirty(true); }} /></div><div><label className="text-[10px] font-black text-slate-400 block uppercase tracking-widest mb-1 ml-1">學生姓名</label><span className="text-3xl font-black text-slate-800 border-b-2 border-transparent px-2 py-1 inline-block">{data.students[currentStudentIdx].name}</span></div></div>
+                                        <button onClick={() => setViewMode('preview')} className="bg-slate-900 text-white px-8 py-3.5 rounded-2xl font-black flex items-center gap-2 hover:bg-slate-800 transition-all shadow-xl active:scale-95"><Printer size={18} /> 列印預覽</button>
+                                    </header>
+                                    <StudentEditor student={data.students[currentStudentIdx]} subjects={data.settings.subjects} section2Config={data.settings.section2Indicators || []} levels={data.settings.levels} readOnly={readOnly} onChange={(updatedStudent) => { const newS = [...data.students]; newS[currentStudentIdx] = updatedStudent; setData({...data, students: newS}); setDirty(true); }} />
+                                </div>
+                            )}
+                        </main>
+                    </div>
+
+                    {viewMode === 'preview' && data && currentStudentIdx !== -1 && (
+                        <div className="print-container fixed inset-0 z-[100] bg-slate-900/98 overflow-y-auto backdrop-blur-md">
+                            <div className="w-[210mm] mx-auto bg-white min-h-screen shadow-2xl my-10 print:m-0 print:w-full rounded-sm overflow-hidden"><PrintPreview student={data.students[currentStudentIdx]} classSettings={data.settings} /></div>
+                            <div className="no-print fixed bottom-10 right-10 flex gap-4"><button onClick={() => window.print()} className="bg-indigo-600 text-white px-10 py-4 rounded-full font-black shadow-2xl hover:bg-indigo-500 transition-all scale-110 flex items-center gap-2"><Printer size={20} /> 確認列印</button><button onClick={() => setViewMode('editor')} className="bg-slate-800 text-white px-8 py-4 rounded-full font-black shadow-xl hover:bg-slate-700 transition-all">返回編輯</button></div>
+                        </div>
+                    )}
+                </>
+            );
+        };
+
+        const TeacherAutoLoader = ({ user, onLogout }) => {
+            const [yearId, setYearId] = useState(null);
+            useEffect(() => { const getLatestYear = async () => { const years = await cloudService.getAllYears(); if (years.length > 0) setYearId(years[years.length - 1].id); }; getLatestYear(); }, []);
+            if (!yearId) return <div className="h-screen flex items-center justify-center">尋找學年資料中...</div>;
+            return <ClassroomEditor yearId={yearId} classId={user.classId} userRole={UserRole.TEACHER} onLogout={onLogout} readOnly={false} />;
+        };
+
+        // 4.7 App Component
+        const App = () => {
+            const [user, setUser] = useState(null);
+            const [loading, setLoading] = useState(true);
+            const [adminViewClassId, setAdminViewClassId] = useState(null);
+            const [adminViewYearId, setAdminViewYearId] = useState(null);
+            const [targetStudentId, setTargetStudentId] = useState(undefined);
+
+            useEffect(() => { checkAuth(); }, []);
+
+            const checkAuth = async () => {
+                const currentUser = await cloudService.getCurrentUser();
+                setUser(currentUser);
+                setLoading(false);
+            };
+
+            const handleLogout = async () => {
+                await cloudService.logout();
+                setUser(null);
+                setAdminViewClassId(null);
+                setAdminViewYearId(null);
+            };
+
+            const handleViewClass = (yearId, classId) => { setAdminViewYearId(yearId); setAdminViewClassId(classId); setTargetStudentId(undefined); };
+            const handleViewStudent = (yearId, classId, studentId) => { setAdminViewYearId(yearId); setAdminViewClassId(classId); setTargetStudentId(studentId); };
+
+            if (loading) return <div className="h-screen flex items-center justify-center bg-slate-900 text-white">載入中...</div>;
+            if (!user) return <Login onLogin={setUser} />;
+
+            if (user.role === UserRole.ADMIN || user.role === UserRole.VIEWER) {
+                if (adminViewYearId && adminViewClassId) {
+                    return <ClassroomEditor yearId={adminViewYearId} classId={adminViewClassId} userRole={user.role} onLogout={handleLogout} onBackToAdmin={() => { setAdminViewClassId(null); setAdminViewYearId(null); }} readOnly={user.role === UserRole.VIEWER} initialStudentId={targetStudentId} />;
+                }
+                return <AdminDashboard onLogout={handleLogout} onViewClass={handleViewClass} onViewStudent={handleViewStudent} userRole={user.role} />;
+            }
+
+            if (user.role === UserRole.TEACHER && user.classId) {
+                return <TeacherAutoLoader user={user} onLogout={handleLogout} />;
+            }
+            return <div>系統狀態錯誤</div>;
+        };
+
+        // --- 5. Mount App ---
+        const root = createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
