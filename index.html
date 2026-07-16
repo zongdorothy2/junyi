@@ -506,17 +506,19 @@ const PrintPreview = ({ student, classSettings }) => {
                     <thead>
                         <tr className="bg-slate-50">
                             {/* 固定指標寬度為 30% */}
-                            <th className="border border-black p-1 text-left w-[30%]">評量指標</th>
+                            <th className="border border-black p-1 text-left w-[44%]">評量指標</th>
                             
                             {/* 每個分數等級佔 10%，共 40% */}
                             {levels.map((l, i) => (
-                                <th key={i} className="border border-black p-1 w-[10%] text-center">
-                                    {l.substring(0, 4)}
-                                </th>
-                            ))}
+    <th key={i} className="border border-black p-1 w-[7%] text-center leading-tight">
+        <div className="max-w-[2.5em] mx-auto break-all">
+            {l}
+        </div>
+    </th>
+))}
                             
                             {/* 固定備註寬度為 30% */}
-                            <th className="border border-black p-1 text-left w-[30%]">備註</th>
+                            <th className="border border-black p-1 text-left w-[28%]">備註</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -575,13 +577,15 @@ const PrintPreview = ({ student, classSettings }) => {
             <thead>
                 <tr className="bg-slate-50">
                     {/* 與上方學科表格保持一致的 30% / 10% / 30% 配置 */}
-                    <th className="border border-black p-1 text-left w-[30%]">指標項目</th>
+                    <th className="border border-black p-1 text-left w-[44%]">指標項目</th>
                     {levels.map((l, i) => (
-                        <th key={i} className="border border-black p-1 w-[10%] text-center">
-                            {l.substring(0, 4)}
-                        </th>
-                    ))}
-                    <th className="border border-black p-1 text-left w-[30%]">備註</th>
+    <th key={i} className="border border-black p-1 w-[7%] text-center leading-tight">
+        <div className="max-w-[2.5em] mx-auto break-all">
+            {l}
+        </div>
+    </th>
+))}
+                    <th className="border border-black p-1 text-left w-[28%]">備註</th>
                 </tr>
             </thead>
             <tbody>
